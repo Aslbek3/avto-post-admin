@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
-from config import MONGO_URL, ADMIN_ID, TIMEZONE
+from config import MONGO_URL, ADMINS, TIMEZONE
 
 router = Router()
 cluster = AsyncIOMotorClient(MONGO_URL)
@@ -32,16 +32,21 @@ class ChannelState(StatesGroup):
     waiting_for_name = State()
     waiting_for_id = State()
 
+# Menyudagi tugmalar ro'yxati (Bekor qilish tizimi uchun kerak)
+MENU_BUTTONS = ["📥 Post yuklash", "📅 Reja", "⚙️ Kanallar", "/start"]
+
 @router.message(F.text == "/start")
 async def start_cmd(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id not in ADMINS: return
     await state.clear()
-    await message.answer("Assalomu alaykum! Tizim ishlayapti.", reply_markup=main_menu)
+    await message.answer("Assalomu alaykum, Admin! Tizim tayyor.", reply_markup=main_menu)
 
 # ==================== KANALLAR ====================
 @router.message(F.text == "⚙️ Kanallar")
-async def channels_menu(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
+async def channels_menu(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
+    await state.clear() 
+    
     channels = await db.channels.find().to_list(length=100)
     text = "Sizning kanallaringiz:\n\n"
     if not channels: text += "Hozircha yo'q."
@@ -52,26 +57,42 @@ async def channels_menu(message: types.Message):
 
 @router.callback_query(F.data == "add_channel")
 async def add_ch(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Kanal nomi (Masalan: Asosiy):")
+    await callback.message.answer("Kanal nomini yozing (Masalan: Asosiy kanal):")
     await state.set_state(ChannelState.waiting_for_name)
+    await callback.answer()
 
 @router.message(ChannelState.waiting_for_name)
 async def ch_name(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        return
+        
     await state.update_data(name=message.text)
-    await message.answer("Kanal ID yoki Username:")
+    await message.answer("Endi Kanal ID'sini (masalan: -100123456789) yoki Usernameni (@kanal_nomi) yozing:")
     await state.set_state(ChannelState.waiting_for_id)
 
 @router.message(ChannelState.waiting_for_id)
 async def ch_id(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        return
+        
+    # QAT'IY TEKSHIRUV: ID -100 yoki @ bilan boshlanishi shart
+    if not (message.text.startswith("-100") or message.text.startswith("@")):
+        await message.answer("❌ Xato! Kanal ID'si doim '-100' bilan yoki username '@' bilan boshlanishi kerak. Qaytadan yozing:")
+        return 
+        
     data = await state.get_data()
     await db.channels.insert_one({"channel_name": data['name'], "channel_id": message.text})
-    await message.answer("✅ Kanal saqlandi!")
+    await message.answer(f"✅ Kanal '{data['name']}' muvaffaqiyatli saqlandi!")
     await state.clear()
 
 # ==================== REJA (KUTISH ZALI) ====================
 @router.message(F.text == "📅 Reja")
-async def show_schedule(message: types.Message):
-    if message.from_user.id != ADMIN_ID: return
+async def show_schedule(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS: return
+    await state.clear()
+    
     posts = await db.posts.find({"status": "pending"}).sort("time", 1).to_list(length=20)
     
     if not posts:
@@ -99,19 +120,28 @@ async def delete_post(callback: types.CallbackQuery):
 # ==================== POST YUKLASH ====================
 @router.message(F.text == "📥 Post yuklash")
 async def post_start(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id not in ADMINS: return
+    await state.clear()
     await message.answer("Postni yuboring (rasm/video/matn):")
     await state.set_state(PostState.waiting_for_post)
 
 @router.message(PostState.waiting_for_post)
 async def post_get(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        return
+        
     await state.update_data(msg_id=message.message_id, chat_id=message.chat.id)
-    await message.answer("Tugma: `Matn - ssilka` yoki `Yo'q`:")
+    await message.answer("Tugma qo'shamizmi?\nFormat: `Batafsil - https://t.me/link`\nAgar yo'q bo'lsa, **Yo'q** deb yozing.")
     await state.set_state(PostState.waiting_for_button)
 
 @router.message(PostState.waiting_for_button)
 async def btn_get(message: types.Message, state: FSMContext):
-    text = message.text
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        return
+        
+    text = message.text or ""
     b_text, b_url = None, None
     if "http" in text:
         parts = text.split("http", 1)
@@ -122,22 +152,26 @@ async def btn_get(message: types.Message, state: FSMContext):
     channels = await db.channels.find().to_list(length=100)
     
     if not channels:
-        await message.answer("❌ Kanallar yo'q! /start bosing.")
+        await message.answer("❌ Bazada kanallar yo'q! Avval kanal qo'shing.")
         await state.clear()
         return
         
     builder = [[InlineKeyboardButton(text=c['channel_name'], callback_data=f"ch_{c['channel_id']}")] for c in channels]
-    await message.answer("Kanalni tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=builder))
+    await message.answer("Qaysi kanalga joylaymiz?", reply_markup=InlineKeyboardMarkup(inline_keyboard=builder))
     await state.set_state(PostState.waiting_for_channel)
 
 @router.callback_query(PostState.waiting_for_channel, F.data.startswith("ch_"))
 async def ch_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(target=callback.data.split("ch_")[1])
-    await callback.message.answer("Vaqtni kiriting (Vergul yoki yangi qator bilan bir nechta yozish mumkin):\nMasalan:\n15:00\n04-01 16:30")
+    await callback.message.answer("Vaqtni kiriting (Masalan: `15:00` yoki `04-01 16:30`).\nVergul bilan bir nechta vaqt ham kiritish mumkin.")
     await state.set_state(PostState.waiting_for_time)
 
 @router.message(PostState.waiting_for_time)
 async def process_smart_time(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        return
+        
     data = await state.get_data()
     times_input = message.text.replace(",", "\n").split("\n")
     
@@ -163,9 +197,9 @@ async def process_smart_time(message: types.Message, state: FSMContext):
             })
             success_count += 1
         except Exception as e:
-            errors.append(f"{t_str} (Xato format)")
+            errors.append(f"`{t_str}` (Xato format. HH:MM ko'rinishida yozing)")
 
-    res_text = f"✅ {success_count} ta post saqlandi!"
+    res_text = f"✅ **{success_count}** ta post rejalashtirildi!"
     if errors:
         res_text += "\n\n❌ Xatolar:\n" + "\n".join(errors)
     
