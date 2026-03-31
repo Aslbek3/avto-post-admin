@@ -23,16 +23,6 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-time_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="Hozir (+1 min)"), KeyboardButton(text="Hozir (+5 min)")],
-        [KeyboardButton(text="09:00"), KeyboardButton(text="12:00"), KeyboardButton(text="15:00")],
-        [KeyboardButton(text="18:00"), KeyboardButton(text="21:00"), KeyboardButton(text="23:00")],
-        [KeyboardButton(text="Bekor qilish")]
-    ],
-    resize_keyboard=True
-)
-
 # ==================== HOLATLAR (STATES) ====================
 class PostState(StatesGroup):
     waiting_for_post = State()
@@ -43,6 +33,7 @@ class SettingsState(StatesGroup):
     waiting_for_ch_name = State()
     waiting_for_ch_id = State()
     waiting_for_admin_id = State()
+    waiting_for_time_add = State() # Avto-vaqt qo'shish uchun qaytarildi!
 
 MENU_BUTTONS = ["📥 Post yuklash", "📅 Reja", "⚙️ Sozlamalar", "📊 Statistika", "🚀 PRO Versiya", "Bekor qilish", "/start"]
 
@@ -78,7 +69,7 @@ async def pro_ad(message: types.Message):
         "✅ Rasmlarga avtomatik Watermark (Suv belgisi) yozish;\n"
         "✅ Kanallar va postlar sonida umuman cheklov yo'q;\n"
         "✅ Interval taymer (har X minutda avtomatik post tashlash).\n\n"
-        "Tarifni yangilash uchun adminga yozing."
+        "Tarifni yangilash uchun adminga yozing. @aslbek_1203 "
     )
     await message.answer(text)
 
@@ -99,15 +90,61 @@ async def show_stats(message: types.Message):
         text += f"🔹 {ch['channel_name']}\n   ⏳ Kutmoqda: {p} | ✅ Yuborildi: {s}\n\n"
     await message.answer(text)
 
-# ==================== SOZLAMALAR (Kanallar va Adminlar) ====================
+# ==================== SOZLAMALAR (Kanallar, Adminlar, Avto-Vaqtlar) ====================
 @router.message(F.text == "⚙️ Sozlamalar")
 async def settings_menu(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id): return
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Kanallar", callback_data="set_channels"), InlineKeyboardButton(text="👥 Adminlar", callback_data="set_admins")]
+        [InlineKeyboardButton(text="📢 Kanallar", callback_data="set_channels"), InlineKeyboardButton(text="👥 Adminlar", callback_data="set_admins")],
+        [InlineKeyboardButton(text="⏰ Avto-vaqtlar", callback_data="set_times")] # AVTO VAQTLAR QAYTARILDI
     ])
     await message.answer("⚙️ **Sozlamalar bo'limi:**", reply_markup=kb)
+
+# --- Avto Vaqtlar ---
+@router.callback_query(F.data == "set_times")
+async def set_times(call: types.CallbackQuery):
+    times = await db.autotimes.find().to_list(length=50)
+    text = "⏰ **Sizning Avto-vaqtlaringiz:**\n\n"
+    if not times: text += "Hozircha hech qanday vaqt qo'shilmagan.\n"
+    for t in times: text += f"🔹 {t['time']}\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Vaqt qo'shish", callback_data="add_time"), InlineKeyboardButton(text="➖ O'chirish", callback_data="del_time_list")]
+    ])
+    await call.message.edit_text(text, reply_markup=kb)
+
+@router.callback_query(F.data == "add_time")
+async def add_time_st(call: types.CallbackQuery, state: FSMContext):
+    await call.message.answer("Yangi soatni kiriting (Masalan: `15:00`):")
+    await state.set_state(SettingsState.waiting_for_time_add)
+
+@router.message(SettingsState.waiting_for_time_add)
+async def save_time(msg: types.Message, state: FSMContext):
+    if msg.text in MENU_BUTTONS: await state.clear(); return
+    try:
+        # To'g'ri yozilganini tekshiramiz
+        datetime.strptime(msg.text.strip(), "%H:%M")
+        await db.autotimes.insert_one({"time": msg.text.strip()})
+        await msg.answer("✅ Avto-vaqt qo'shildi!")
+        await state.clear()
+    except:
+        await msg.answer("❌ Xato! Soatni faqat `15:00` ko'rinishida yozing.")
+
+@router.callback_query(F.data == "del_time_list")
+async def del_time_list(call: types.CallbackQuery):
+    times = await db.autotimes.find().to_list(length=50)
+    if not times:
+        await call.answer("O'chirish uchun vaqt yo'q!", show_alert=True)
+        return
+    kb = [[InlineKeyboardButton(text=f"❌ {t['time']}", callback_data=f"deltm_{t['_id']}")] for t in times]
+    await call.message.edit_text("O'chirmoqchi bo'lgan vaqtni tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+
+@router.callback_query(F.data.startswith("deltm_"))
+async def del_tm(call: types.CallbackQuery):
+    tid = call.data.split("_")[1]
+    await db.autotimes.delete_one({"_id": ObjectId(tid)})
+    await call.answer("✅ O'chirildi!", show_alert=True)
+    await set_times(call)
 
 # --- Adminlar ---
 @router.callback_query(F.data == "set_admins")
@@ -255,9 +292,24 @@ async def ch_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(target=callback.data.split("ch_")[1])
     await callback.message.delete()
     
+    # BAZADAN AVTO-VAQTLARNI TORTIB OLIB, TUGMA YASAYMIZ (Test tugmalari bilan birga)
+    times = await db.autotimes.find().to_list(length=50)
+    buttons = [[KeyboardButton(text="Hozir (+1 min)"), KeyboardButton(text="Hozir (+5 min)")]] # Birinchi qatorda test tugmalar
+    
+    row = []
+    for t in times:
+        row.append(KeyboardButton(text=t['time']))
+        if len(row) == 3: # Har qatorda 3 tadan avto-vaqt
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([KeyboardButton(text="Bekor qilish")])
+    
+    kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    
     await callback.message.answer(
-        "⏰ **Vaqtni tanlang yoki qo'lda yozing:** ",
-        reply_markup=time_menu
+        "⏰ **Vaqtni tanlang yoki qo'lda yozing** ",
+        reply_markup=kb
     )
     await state.set_state(PostState.waiting_for_time)
 
@@ -278,7 +330,7 @@ async def save_post_time(message: types.Message, state: FSMContext):
         elif t_str == "Hozir (+5 min)":
             final_dt = now + timedelta(minutes=5)
             
-        # 2. Qo'lda soat yozish yoki tayyor soat tugmalari (Masalan: "15:00" yoki "08:00")
+        # 2. Qo'lda soat yozish yoki tayyor soat tugmalari (Masalan: "15:00")
         elif len(t_str) <= 5: 
             parsed_dt = datetime.strptime(f"{now.strftime('%m-%d')} {t_str}", "%m-%d %H:%M")
             if parsed_dt.time() <= now.time():
