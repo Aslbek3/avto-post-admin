@@ -13,7 +13,7 @@ router = Router()
 cluster = AsyncIOMotorClient(MONGO_URL)
 db = cluster["avto_post_db"]
 
-# Asosiy menyu (Statistika va Pro qo'shilgan)
+# Asosiy menyu
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📥 Post yuklash")],
@@ -34,16 +34,18 @@ time_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# Holatlar
 class PostState(StatesGroup):
     waiting_for_post = State()
     waiting_for_channel = State()
     waiting_for_time = State()
+    waiting_for_auto_hour = State() 
+    waiting_for_auto_date = State() 
 
 class ChannelState(StatesGroup):
     waiting_for_name = State()
     waiting_for_id = State()
 
-# Menyudagi tugmalar ro'yxati (Bekor qilish tizimi uchun)
 MENU_BUTTONS = ["📥 Post yuklash", "📅 Reja", "⚙️ Kanallar", "📊 Statistika", "🚀 PRO Versiya", "Bekor qilish", "/start"]
 
 # ==================== START VA REKLAMA ====================
@@ -51,25 +53,18 @@ MENU_BUTTONS = ["📥 Post yuklash", "📅 Reja", "⚙️ Kanallar", "📊 Stati
 async def start_cmd(message: types.Message, state: FSMContext):
     await state.clear()
     
-    # Agar oddiy odam (admin bo'lmagan) kirsatsa:
     if message.from_user.id not in ADMINS:
         reklama_matni = (
             "👋 Assalomu alaykum!\n\n"
             "🤖 Bu bot Telegram kanallarga xabarlarni avtomatik joylash uchun mo'ljallangan.\n\n"
             "💎 **Shaxsiy Avto-Post botga ega bo'lishni xohlaysizmi?**\n"
             "Kanallaringizni avtomatlashtiring, vaqtni tejang va ishingizni osonlashtiring!\n\n"
-            "Batafsil ma'lumot va bot xarid qilish uchun adminga yozing: @Sukuna_5288"
+            "Batafsil ma'lumot va bot xarid qilish uchun adminga yozing: @SizningUsername"
         )
         await message.answer(reklama_matni)
         return
 
-    # Agar admin kirsatsa:
-    await message.answer(
-        "👋 Assalomu alaykum, Admin!\n\n"
-        "Siz botning **Basic (Test)** versiyasidan foydalanyapsiz.\n"
-        "Menyudan kerakli bo'limni tanlang:", 
-        reply_markup=main_menu
-    )
+    await message.answer("👋 Assalomu alaykum, Admin!\nSiz botning **Basic (Test)** versiyasidasiz.", reply_markup=main_menu)
 
 # ==================== PRO REKLAMASI ====================
 @router.message(F.text == "🚀 PRO Versiya")
@@ -77,12 +72,12 @@ async def pro_ad(message: types.Message):
     if message.from_user.id not in ADMINS: return
     text = (
         "🚀 **PRO Versiya Afzalliklari:**\n\n"
-        "✅ Birdaniga yuzlab postlarni vergul orqali oson rejalashtirish;\n"
-        "✅ Har bir post tagiga chiroyli ssilka tugmalari qo'shish;\n"
+        "✅ Birdaniga yuzlab postlarni oson rejalashtirish;\n"
+        "✅ Postlarga chiroyli ssilka tugmalari qo'shish;\n"
         "✅ Rasmlarga avtomatik Watermark (Suv belgisi) yozish;\n"
         "✅ Kanallar va postlar sonida umuman cheklov yo'q;\n"
         "✅ Interval taymer (har X minutda avtomatik post tashlash).\n\n"
-        "Tarifni yangilash uchun adminga yozing: @Sukuna_5288"
+        "Tarifni yangilash uchun adminga yozing: @SizningUsername"
     )
     await message.answer(text)
 
@@ -91,18 +86,27 @@ async def pro_ad(message: types.Message):
 async def show_stats(message: types.Message):
     if message.from_user.id not in ADMINS: return
     
-    # Bazadan shu adminga tegishli ma'lumotlarni sanaymiz
-    channels_count = await db.channels.count_documents({})
-    pending_posts = await db.posts.count_documents({"status": "pending"})
-    sent_posts = await db.posts.count_documents({"status": "sent"})
+    channels = await db.channels.find().to_list(length=100)
+    pending_total = await db.posts.count_documents({"status": "pending"})
+    sent_total = await db.posts.count_documents({"status": "sent"})
     
     text = (
-        "📊 **Sizning botingiz statistikasi:**\n\n"
-        f"📢 Ulangan kanallar: **{channels_count} ta**\n"
-        f"⏳ Navbatdagi postlar: **{pending_posts} ta**\n"
-        f"✅ Muvaffaqiyatli yuborilganlar: **{sent_posts} ta**\n\n"
-        "*(Limitlarni olib tashlash va ko'proq imkoniyatlar uchun PRO versiyaga o'ting)*"
+        "📊 **Umumiy Statistika:**\n\n"
+        f"📢 Jami kanallar: **{len(channels)} ta**\n"
+        f"⏳ Jami kutayotgan postlar: **{pending_total} ta**\n"
+        f"✅ Jami yuborilgan postlar: **{sent_total} ta**\n\n"
+        "〰️〰️〰️〰️〰️〰️〰️〰️\n"
+        "📈 **Kanallar bo'yicha holat:**\n\n"
     )
+    
+    if not channels:
+        text += "Hozircha kanallar ulanmagan."
+    else:
+        for ch in channels:
+            ch_pending = await db.posts.count_documents({"status": "pending", "target": ch['channel_id']})
+            ch_sent = await db.posts.count_documents({"status": "sent", "target": ch['channel_id']})
+            text += f"🔹 **{ch['channel_name']}**\n   ⏳ Kutmoqda: {ch_pending} ta | ✅ Yuborildi: {ch_sent} ta\n\n"
+            
     await message.answer(text)
 
 # ==================== KANALLAR ====================
@@ -141,9 +145,8 @@ async def ch_id(message: types.Message, state: FSMContext):
         await state.clear()
         return
         
-    # QAT'IY TEKSHIRUV: ID -100 yoki @ bilan boshlanishi shart
     if not (message.text.startswith("-100") or message.text.startswith("@")):
-        await message.answer("❌ Xato! Kanal ID'si doim '-100' yoki username '@' bilan boshlanishi kerak. Qaytadan yozing:")
+        await message.answer("❌ Xato! Kanal ID doim '-100' yoki username '@' bilan boshlanishi kerak. Qaytadan yozing:")
         return 
         
     data = await state.get_data()
@@ -179,19 +182,20 @@ async def delete_post(callback: types.CallbackQuery):
     post_id = callback.data.split("_")[1]
     await db.posts.delete_one({"_id": ObjectId(post_id)})
     await callback.message.delete()
-    await callback.answer("Post rejadagi ro'yxatdan o'chirildi.")
+    await callback.answer("Post o'chirildi.")
 
 # ==================== POST YUKLASH VA AVTO VAQT ====================
 @router.message(F.text == "📥 Post yuklash")
 async def post_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS: return
     await state.clear()
-    await message.answer("Postni yuboring (rasm/video/matn):")
+    await message.answer("Postni yuboring (rasm/video/matn):", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Bekor qilish")]], resize_keyboard=True))
     await state.set_state(PostState.waiting_for_post)
 
 @router.message(PostState.waiting_for_post)
 async def post_get(message: types.Message, state: FSMContext):
     if message.text in MENU_BUTTONS:
+        await message.answer("Bekor qilindi.", reply_markup=main_menu)
         await state.clear()
         return
         
@@ -210,61 +214,119 @@ async def post_get(message: types.Message, state: FSMContext):
 @router.callback_query(PostState.waiting_for_channel, F.data.startswith("ch_"))
 async def ch_select(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(target=callback.data.split("ch_")[1])
-    
     await callback.message.delete()
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🤖 Avto vaqt")], [KeyboardButton(text="Bekor qilish")]],
+        resize_keyboard=True
+    )
     await callback.message.answer(
-        "⏰ **Vaqtni tanlang yoki o'zingiz yozing:**\n"
-        "(Masalan, qo'lda yozsangiz: `15:00` yoki `04-15 15:00`)\n\n"
-        "*Eslatma: Basic versiyada faqat bitta vaqt kiritish mumkin.*",
-        reply_markup=time_menu 
+        "⏰ **Vaqtni kiriting:**\n(Masalan: `15:00` yoki `04-15 15:00`)\n\nYoki tayyor soatlarni tanlash uchun pastdagi **🤖 Avto vaqt** tugmasini bosing.",
+        reply_markup=kb
     )
     await state.set_state(PostState.waiting_for_time)
 
 @router.message(PostState.waiting_for_time)
-async def process_smart_time(message: types.Message, state: FSMContext):
+async def process_manual_time(message: types.Message, state: FSMContext):
     if message.text in MENU_BUTTONS:
-        await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu)
+        await message.answer("Bekor qilindi.", reply_markup=main_menu)
         await state.clear()
         return
         
+    if message.text == "🤖 Avto vaqt":
+        hours_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="08:00"), KeyboardButton(text="10:00"), KeyboardButton(text="12:00")],
+                [KeyboardButton(text="14:00"), KeyboardButton(text="16:00"), KeyboardButton(text="18:00")],
+                [KeyboardButton(text="20:00"), KeyboardButton(text="22:00"), KeyboardButton(text="Bekor qilish")]
+            ],
+            resize_keyboard=True
+        )
+        await message.answer("⏰ Qaysi soatga rejalashtiramiz?", reply_markup=hours_kb)
+        await state.set_state(PostState.waiting_for_auto_hour)
+        return
+
     data = await state.get_data()
     t_str = message.text.strip()
-    
     if "," in t_str or "\n" in t_str:
-        await message.answer("❌ Basic versiyada faqat bitta vaqt kiritish mumkin! Bitta vaqt yozing.", reply_markup=time_menu)
+        await message.answer("❌ Basic versiyada faqat 1 ta vaqt kiritish mumkin!")
         return
 
     try:
         now = datetime.now(TIMEZONE)
-        
-        # Tugmalarni tushunish mantig'i
-        if "Bugun" in t_str:
-            soat = t_str.split(" ")[1] 
-            parsed_dt = datetime.strptime(f"{now.strftime('%m-%d')} {soat}", "%m-%d %H:%M")
-        elif "Ertaga" in t_str:
-            soat = t_str.split(" ")[1]
-            ertaga = now + timedelta(days=1)
-            parsed_dt = datetime.strptime(f"{ertaga.strftime('%m-%d')} {soat}", "%m-%d %H:%M")
-        elif len(t_str) <= 5: 
+        if len(t_str) <= 5: 
             parsed_dt = datetime.strptime(f"{now.strftime('%m-%d')} {t_str}", "%m-%d %H:%M")
-            if parsed_dt.time() < now.time():
-                parsed_dt = parsed_dt + timedelta(days=1)
+            if parsed_dt.time() < now.time(): parsed_dt += timedelta(days=1)
         else: 
             parsed_dt = datetime.strptime(t_str, "%m-%d %H:%M")
         
         final_dt = TIMEZONE.localize(parsed_dt.replace(year=2026))
         
         await db.posts.insert_one({
-            "message_id": data['msg_id'], 
-            "from_chat_id": data['chat_id'],
-            "target": data['target'], 
-            "time": final_dt.isoformat(),
-            "status": "pending",
-            "is_pro": False
+            "message_id": data['msg_id'], "from_chat_id": data['chat_id'],
+            "target": data['target'], "time": final_dt.isoformat(),
+            "status": "pending", "is_pro": False
         })
-        
         await message.answer(f"✅ Post saqlandi! Vaqti: {final_dt.strftime('%d-%m-%Y %H:%M')}", reply_markup=main_menu)
         await state.clear()
+    except Exception:
+        await message.answer("❌ Xato format. Soatni to'g'ri yozing.")
+
+@router.message(PostState.waiting_for_auto_hour)
+async def get_auto_hour(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await message.answer("Bekor qilindi.", reply_markup=main_menu)
+        await state.clear()
+        return
         
+    await state.update_data(auto_hour=message.text)
+    
+    dates_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Bugun"), KeyboardButton(text="Ertaga")],
+            [KeyboardButton(text="Indinga"), KeyboardButton(text="Bekor qilish")]
+        ],
+        resize_keyboard=True
+    )
+    await message.answer(f"Tanlangan soat: **{message.text}**\nEndi sanani tanlang:", reply_markup=dates_kb)
+    await state.set_state(PostState.waiting_for_auto_date)
+
+@router.message(PostState.waiting_for_auto_date)
+async def get_auto_date(message: types.Message, state: FSMContext):
+    if message.text in MENU_BUTTONS:
+        await message.answer("Bekor qilindi.", reply_markup=main_menu)
+        await state.clear()
+        return
+        
+    data = await state.get_data()
+    hour_str = data.get('auto_hour', '12:00')
+    
+    now = datetime.now(TIMEZONE)
+    try:
+        hour, minute = map(int, hour_str.split(':'))
+        
+        if message.text == "Bugun":
+            target_date = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target_date < now:
+                await message.answer("⚠️ Bu vaqt o'tib ketgan! Avtomatik tarzda ertangi kunga o'tkazildi.")
+                target_date += timedelta(days=1)
+        elif message.text == "Ertaga":
+            target_date = (now + timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        elif message.text == "Indinga":
+            target_date = (now + timedelta(days=2)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        else:
+            parsed_date = datetime.strptime(message.text.strip(), "%m-%d")
+            target_date = TIMEZONE.localize(parsed_date.replace(year=2026, hour=hour, minute=minute))
+
+        final_dt = TIMEZONE.localize(target_date.replace(tzinfo=None)) if target_date.tzinfo is None else target_date
+
+        await db.posts.insert_one({
+            "message_id": data['msg_id'], "from_chat_id": data['chat_id'],
+            "target": data['target'], "time": final_dt.isoformat(),
+            "status": "pending", "is_pro": False
+        })
+        
+        await message.answer(f"✅ Avto-vaqt bilan rejalashtirildi!\nKuni va soati: **{final_dt.strftime('%d-%m-%Y %H:%M')}**", reply_markup=main_menu)
+        await state.clear()
     except Exception as e:
-        await message.answer(f"❌ Noto'g'ri vaqt formati. Tugmalardan foydalaning yoki to'g'ri yozing.")
+        await message.answer("❌ Xatolik yuz berdi. Iltimos tugmalardan foydalaning.")
