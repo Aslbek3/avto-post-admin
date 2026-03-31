@@ -17,23 +17,29 @@ db = cluster["avto_post_db"]
 scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
 # ==================== TAYMER VA ANTISPAM ====================
-async def check_and_post():
-    try:
-        now = datetime.now(TIMEZONE).isoformat()
-        
-        # Vaqti kelgan postlarni olish
-        cursor = db.posts.find({"status": "pending", "time": {"$lte": now}})
-        posts = await cursor.to_list(length=100) 
-
-        for p in posts:
-            try:
-                # Tugma o'chirilgan, faqat postni o'zi ketadi
+# 1. Postni kanalga yuborish
                 await bot.copy_message(
                     chat_id=p['target'],
                     from_chat_id=p['from_chat_id'],
-                    message_id=p['message_id']
+                    message_id=p['message_id'],
+                    reply_markup=markup
                 )
                 
+                # 2. Muvaffaqiyatli bo'lsa, statusni 'sent' qilamiz
+                await db.posts.update_one({"_id": p["_id"]}, {"$set": {"status": "sent"}})
+                
+                # ================= YANGILIK: ADMINGA HISOBOT =================
+                report_text = f"✅ **Post yuborildi!**\n📢 Kanal: {p['target']}\n⏰ Vaqti: {p['time']}"
+                for admin in ADMINS: # Kelajakda buni bazadan o'qiydigan qilamiz
+                    try:
+                        await bot.send_message(chat_id=admin, text=report_text)
+                        await bot.copy_message(chat_id=admin, from_chat_id=p['from_chat_id'], message_id=p['message_id'], reply_markup=markup)
+                    except:
+                        pass
+                
+                 # ANTISPAM: Har bir post o'rtasida pauza (Bot bloklanmasligi uchun eng muhim qator!)
+                await asyncio.sleep(0.05) 
+
                 # Statistika uchun: Yuborilgan vaqtni yozib qo'yamiz
                 await db.posts.update_one(
                     {"_id": p["_id"]}, 
@@ -43,8 +49,7 @@ async def check_and_post():
                     }}
                 )
                 
-                # ANTISPAM: Har bir post o'rtasida pauza (Bot bloklanmasligi uchun eng muhim qator!)
-                await asyncio.sleep(0.05) 
+               
                 
             except Exception as e:
                 # Xato bo'lsa, Failed statusi beriladi va adminga bildiriladi
