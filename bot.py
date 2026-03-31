@@ -16,80 +16,66 @@ db = cluster["avto_post_db"]
 
 scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
-# ==================== TAYMER VA ANTISPAM ====================
+# Bazadagi barcha adminlarni olish funksiyasi
+async def get_all_admins():
+    admins_db = await db.admins.find().to_list(length=100)
+    return ADMINS + [a['user_id'] for a in admins_db]
+
 async def check_and_post():
     try:
         now = datetime.now(TIMEZONE).isoformat()
-        
-        # Vaqti kelgan postlarni olish
         cursor = db.posts.find({"status": "pending", "time": {"$lte": now}})
         posts = await cursor.to_list(length=100) 
 
+        active_admins = await get_all_admins()
+
         for p in posts:
             try:
-                # Basic versiya: faqat postning o'zi ketadi (tugmalarsiz)
+                # 1. Postni haqiqiy kanalga yuborish
                 await bot.copy_message(
                     chat_id=p['target'],
                     from_chat_id=p['from_chat_id'],
                     message_id=p['message_id']
                 )
                 
-                # Statistika uchun: holatni 'sent' ga o'zgartirish va vaqtni yozish
+                # 2. Statusni 'sent' qilish
                 await db.posts.update_one(
                     {"_id": p["_id"]}, 
-                    {"$set": {
-                        "status": "sent", 
-                        "sent_at": datetime.now(TIMEZONE).isoformat() 
-                    }}
+                    {"$set": {"status": "sent", "sent_at": datetime.now(TIMEZONE).isoformat()}}
                 )
                 
-                # ================= ADMINGA HISOBOT =================
-                report_text = f"✅ **Post muvaffaqiyatli yuborildi!**\n📢 Kanal: `{p['target']}`\n⏰ Vaqt: `{p['time'][:16]}`"
-                for admin in ADMINS:
+                # ================= 3. ADMINGA HISOBOT =================
+                report_text = f"✅ **Post yuborildi!**\n📢 Kanal: `{p['target']}`\n⏰ Vaqt: `{p['time'][:16]}`"
+                for admin in active_admins:
                     try:
                         await bot.send_message(chat_id=admin, text=report_text)
-                        # Postdan nusxani ham adminga tashlab qo'yamiz
+                        # Post nusxasini adminga ham tashlab qo'yamiz
                         await bot.copy_message(chat_id=admin, from_chat_id=p['from_chat_id'], message_id=p['message_id'])
-                    except Exception:
-                        pass
-                # ===================================================
+                    except: pass
+                # =====================================================
 
-                # ANTISPAM: Har bir post o'rtasida pauza (Bot bloklanmasligi uchun)
+                # 4. Antispam
                 await asyncio.sleep(0.05) 
                 
             except Exception as e:
-                # Xato bo'lsa, Failed statusi beriladi va adminga bildiriladi
                 await db.posts.update_one({"_id": p["_id"]}, {"$set": {"status": "failed", "error": str(e)}})
-                
-                error_msg = (
-                    f"⚠️ **POST JONATISHDA XATO!**\n\n"
-                    f"Kanal: `{p['target']}`\n"
-                    f"Vaqt: `{p['time']}`\n"
-                    f"Sabab: `{str(e)}`\n\n"
-                    f"*Eslatma: Bot kanalda adminligini tekshiring.*"
-                )
-                for admin in ADMINS:
-                    try:
-                        await bot.send_message(chat_id=admin, text=error_msg)
-                    except Exception:
-                        pass 
+                err_text = f"⚠️ **XATOLIK!**\nKanal: `{p['target']}`\nSabab: `{str(e)}`"
+                for admin in active_admins:
+                    try: await bot.send_message(chat_id=admin, text=err_text)
+                    except: pass 
                 
     except Exception as main_e:
         logging.error(f"Taymer xatosi: {main_e}")
 
-# ==================== ISHGA TUSHIRISH ====================
 async def main():
     dp.include_router(router)
     scheduler.add_job(check_and_post, "interval", minutes=1)
     scheduler.start()
-    
-    logging.info("🟢 Basic Bot (Antispam + Hisobot) ishga tushdi...")
+    logging.info("🟢 Bot (To'liq versiya) ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True) 
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("🔴 Bot to'xtatildi")
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass
