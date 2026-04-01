@@ -3,65 +3,144 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, Callback
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from datetime import datetime, timedelta
 
 import database as db
 import config
 
 admin_router = Router()
 
-# ==========================================
-# HOLATLAR (Bosqichma-bosqich ishlash uchun)
-# ==========================================
+# Holatlar
 class PostState(StatesGroup):
     post_kutish = State()
     kanal_tanlash = State()
     vaqt_tanlash = State()
 
-# Asosiy menyu tugmalari
+class ChannelState(StatesGroup):
+    info_kutish = State()
+
+# Asosiy menyu
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Post yuklash"), KeyboardButton(text="📋 Reja")],
-        [KeyboardButton(text="⏰ Avto-vaqt"), KeyboardButton(text="📢 Kanallar")]
+        [KeyboardButton(text="📥 Post yuklash"), KeyboardButton(text="📅 Reja")],
+        [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="🚀 PRO Versiya")]
     ],
     resize_keyboard=True
 )
 
 # ==========================================
-# 1-SHAKL: ODDIY XABAR VA MENYU USHLAGICHLAR
+# 1. START VA REKLAMA
 # ==========================================
-
 @admin_router.message(CommandStart())
-async def start_cmd(message: Message):
-    # Faqat adminlar ishlata oladi
-    if message.from_user.id == config.MAIN_ADMIN or await db.is_admin(message.from_user.id):
-        await message.answer("Bosh menyuga xush kelibsiz!", reply_markup=main_menu)
-
-@admin_router.message(F.text == "📋 Reja")
-async def show_plan(message: Message):
-    stats = await db.get_plan_stats()
-    if not stats:
-        await message.answer("Hozircha navbatda turgan postlar yo'q.")
-        return
+async def start_cmd(message: Message, state: FSMContext):
+    await state.clear()
     
-    javob = "📋 **Navbatdagi postlar rejas:**\n\n"
-    for s in stats:
-        javob += f"Kanal ID ({s['_id'][0]}): {s['count']} ta post\n"
-    await message.answer(javob)
+    if not await db.is_admin(message.from_user.id):
+        reklama_matni = (
+            "👋 Assalomu alaykum!\n\n"
+            "🤖 Bu bot Telegram kanallarga xabarlarni avtomatik joylash uchun mo'ljallangan.\n\n"
+            "💎 **Shaxsiy Avto-Post botga ega bo'lishni xohlaysizmi?**\n"
+            "Kanallaringizni avtomatlashtiring, vaqtni tejang va ishingizni osonlashtiring!\n\n"
+            "Batafsil ma'lumot va bot xarid qilish uchun adminga yozing."
+        )
+        await message.answer(reklama_matni)
+        return
+        
+    await message.answer("👋 Assalomu alaykum, Admin!\nNima qilamiz?", reply_markup=main_menu)
+
+@admin_router.message(F.text == "🚀 PRO Versiya")
+async def pro_ad(message: Message):
+    if not await db.is_admin(message.from_user.id): return
+    text = (
+        "🚀 **PRO Versiya Afzalliklari:**\n\n"
+        "✅ Birdaniga yuzlab postlarni oson rejalashtirish;\n"
+        "✅ Postlarga chiroyli ssilka tugmalari qo'shish;\n"
+        "✅ Rasmlarga avtomatik Watermark (Suv belgisi) yozish;\n"
+        "✅ Kanallar va postlar sonida umuman cheklov yo'q;\n"
+        "✅ Interval taymer (har X minutda avtomatik post tashlash).\n\n"
+        "Tarifni yangilash uchun adminga yozing: @aslbek_1203"
+    )
+    await message.answer(text)
 
 # ==========================================
-# 2-SHAKL: BOSQICHLI ISH JARAYONI (FSM)
+# 2. REJA (KUTISH ZALI)
 # ==========================================
+@admin_router.message(F.text == "📅 Reja")
+async def show_schedule(message: Message):
+    if not await db.is_admin(message.from_user.id): return
+    
+    posts = await db.get_pending_posts() 
+    
+    if not posts:
+        await message.answer("Hozircha navbatda postlar yo'q.")
+        return
+        
+    await message.answer("📅 **Yaqin xabarlar rejasi:**")
+    
+    for i, p in enumerate(posts[:20], 1):
+        btn = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"delpost_{p['_id']}")]
+        ])
+        await message.answer(f"Post #{i} | ⏰ {p['send_time']} | 📢 {len(p['target_channels'])} ta kanal", reply_markup=btn)
 
-# 1-QADAM: Post yuklash tugmasi bosilganda
-@admin_router.message(F.text == "➕ Post yuklash")
+@admin_router.callback_query(F.data.startswith("delpost_"))
+async def delete_post(call: CallbackQuery):
+    pid = call.data.split("_")[1]
+    from bson import ObjectId
+    # Eski xato: db.db.posts emas, faqat db.posts bo'lishi kerak
+    await db.db.posts.delete_one({"_id": ObjectId(pid)})
+    await call.message.delete()
+    await call.answer("✅ Post o'chirildi.")
+
+# ==========================================
+# 3. KANALLAR SOZLAMASI
+# ==========================================
+@admin_router.message(F.text == "📢 Kanallar")
+async def channels_menu(message: Message, state: FSMContext):
+    if not await db.is_admin(message.from_user.id): return
+    
+    kanallar = await db.get_channels()
+    matn = "📢 **Kanallar ro'yxati:**\n\n"
+    for k in kanallar: 
+        matn += f"▪️ {k['channel_id']} | Boti: {k['bot_username']}\n"
+        
+    matn += "\nYangi kanal qo'shish uchun Kanal manzili va Bot manzilini bitta xabarda probel bilan yozing.\n(Masalan: @KinoOlami @Kino_boti)"
+    
+    await message.answer(matn)
+    await state.set_state(ChannelState.info_kutish)
+
+@admin_router.message(ChannelState.info_kutish)
+async def add_channel_fast(message: Message, state: FSMContext):
+    # Menyuga qaytish tugmasi bosilsa to'xtatish
+    if message.text in ["📥 Post yuklash", "📅 Reja", "📢 Kanallar", "🚀 PRO Versiya"]:
+        await state.clear()
+        return
+        
+    qism = message.text.split()
+    if len(qism) == 2:
+        await db.add_channel(
+            channel_id=qism[0], 
+            channel_name=qism[0], 
+            bot_username=qism[1]
+        )
+        await message.answer("✅ Kanal muvaffaqiyatli saqlandi!")
+    else:
+        await message.answer("❌ Xato kiritildi. Iltimos, ikkita manzilni probel tashlab yozing.")
+    
+    await state.clear()
+
+# ==========================================
+# 4. POST YUKLASH TIZIMI
+# ==========================================
+@admin_router.message(F.text == "📥 Post yuklash")
 async def start_post(message: Message, state: FSMContext):
-    await message.answer("Iltimos, tayyor postni yuboring (Rasm va tagida matn):")
+    if not await db.is_admin(message.from_user.id): return
+    await message.answer("Iltimos, postni yuboring (Rasm va matn):")
     await state.set_state(PostState.post_kutish)
 
-# 2-QADAM: Postni qabul qilish va Kanal tanlashga o'tish
 @admin_router.message(StateFilter(PostState.post_kutish))
-async def get_post_content(message: Message, state: FSMContext):
-    # Rasm va matnni ajratib olish
+async def get_post(message: Message, state: FSMContext):
+    # Rasm va matnni olish
     if message.photo:
         photo_id = message.photo[-1].file_id
         text = message.caption or ""
@@ -69,21 +148,23 @@ async def get_post_content(message: Message, state: FSMContext):
         photo_id = None
         text = message.text or ""
         
-    # Xotiraga saqlab turamiz
     await state.update_data(photo_id=photo_id, text=text)
     
-    # Kanallar ro'yxatini Inline tugma qilib chiqaramiz
     kanallar = await db.get_channels()
+    if not kanallar:
+        await message.answer("❌ Kanallar mavjud emas! Avval kanal qo'shing.")
+        await state.clear()
+        return
+        
+    # Inline tugmalar yasash
     tugmalar = []
     for k in kanallar:
         tugmalar.append([InlineKeyboardButton(text=k['channel_name'], callback_data=f"ch_{k['channel_id']}")])
     tugmalar.append([InlineKeyboardButton(text="Barcha kanallar", callback_data="ch_all")])
     
-    kb = InlineKeyboardMarkup(inline_keyboard=tugmalar)
-    await message.answer("Qaysi kanalga yuboramiz?", reply_markup=kb)
+    await message.answer("Qaysi kanalga yuboramiz?", reply_markup=InlineKeyboardMarkup(inline_keyboard=tugmalar))
     await state.set_state(PostState.kanal_tanlash)
 
-# 3-QADAM: Kanal tanlangach, Vaqtni so'rash
 @admin_router.callback_query(StateFilter(PostState.kanal_tanlash))
 async def select_channel(call: CallbackQuery, state: FSMContext):
     tanlov = call.data
@@ -92,37 +173,66 @@ async def select_channel(call: CallbackQuery, state: FSMContext):
         kanallar = await db.get_channels()
         target_ids = [k['channel_id'] for k in kanallar]
     else:
-        # Faqat bitta kanal ID sini olamiz
-        kanal_id = int(tanlov.split("_")[1])
-        target_ids = [kanal_id]
+        target_ids = [tanlov.split("_")[1]]
         
     await state.update_data(target_channels=target_ids)
+    await call.message.delete()
     
-    # Vaqtlarni bazadan olib tugma qilib chiqaramiz
+    # Vaqtlarni tugma qilib chiqarish
     vaqtlar = await db.get_auto_times()
-    vaqt_tugmalari = [[InlineKeyboardButton(text=v, callback_data=f"time_{v}")] for v in vaqtlar]
-    kb = InlineKeyboardMarkup(inline_keyboard=vaqt_tugmalari)
+    tugmalar = [
+        [KeyboardButton(text="Hozir (+1 min)"), KeyboardButton(text="Hozir (+5 min)")]
+    ]
     
-    await call.message.edit_text("Post chiqish vaqtini belgilang:", reply_markup=kb)
+    qator = []
+    for v in vaqtlar:
+        qator.append(KeyboardButton(text=v))
+        if len(qator) == 3:
+            tugmalar.append(qator)
+            qator = []
+    if qator:
+        tugmalar.append(qator)
+        
+    tugmalar.append([KeyboardButton(text="Bekor qilish")])
+    
+    kb = ReplyKeyboardMarkup(keyboard=tugmalar, resize_keyboard=True)
+    await call.message.answer("⏰ Vaqtni tanlang yoki qo'lda yozing (Masalan: 15:00):", reply_markup=kb)
     await state.set_state(PostState.vaqt_tanlash)
 
-# 4-QADAM: Vaqt tanlangach, Bazaga saqlash va jarayonni tugatish
-@admin_router.callback_query(StateFilter(PostState.vaqt_tanlash))
-async def select_time(call: CallbackQuery, state: FSMContext):
-    vaqt = call.data.split("_")[1] # Masalan "15:00" ni ajratib oladi
+@admin_router.message(StateFilter(PostState.vaqt_tanlash))
+async def save_time(message: Message, state: FSMContext):
+    vaqt = message.text.strip()
     
-    # Xotirada yig'ilgan barcha ma'lumotlarni olamiz
+    if vaqt == "Bekor qilish":
+        await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu)
+        await state.clear()
+        return
+
+    hozir = datetime.now(config.TIMEZONE)
+    yakuniy_vaqt_str = ""
+    
+    if vaqt == "Hozir (+1 min)":
+        yakuniy_vaqt_str = (hozir + timedelta(minutes=1)).strftime("%H:%M")
+    elif vaqt == "Hozir (+5 min)":
+        yakuniy_vaqt_str = (hozir + timedelta(minutes=5)).strftime("%H:%M")
+    else:
+        try:
+            # Vaqt formati to'g'riligini tekshirish
+            datetime.strptime(vaqt, "%H:%M")
+            yakuniy_vaqt_str = vaqt
+        except ValueError:
+            await message.answer("❌ Noto'g'ri format. Vaqtni faqat HH:MM ko'rinishida yozing.")
+            return
+            
     data = await state.get_data()
     
-    # Bazaga yozamiz
+    # Bazaga saqlash
     await db.add_post(
-        text=data['text'],
-        photo_id=data['photo_id'],
-        send_time=vaqt,
+        text=data['text'], 
+        photo_id=data['photo_id'], 
+        send_time=yakuniy_vaqt_str, 
         target_channels=data['target_channels']
     )
     
-    await call.message.edit_text(f"✅ Post muvaffaqiyatli saqlandi!\n⏰ Chiqish vaqti: {vaqt}")
-    
-    # Holatni tozalash (jarayon tugadi)
+    await message.answer(f"✅ Post muvaffaqiyatli saqlandi!\n⏰ Chiqish vaqti: {yakuniy_vaqt_str}", reply_markup=main_menu)
     await state.clear()
