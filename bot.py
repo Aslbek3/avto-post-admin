@@ -1,81 +1,90 @@
 import asyncio
 import logging
 from datetime import datetime
+import pytz
+
 from aiogram import Bot, Dispatcher
-from motor.motor_asyncio import AsyncIOMotorClient
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, MONGO_URL, TIMEZONE, ADMINS
-from handlers import router
+import config
+from database import (
+    check_db_connection, get_pending_posts, get_channels, mark_post_sent
+)
+from handlers.admin import admin_router
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+# Loglarni sozlash (xatolarni ko'rish uchun)
+logging.basicConfig(level=logging.INFO)
 
-cluster = AsyncIOMotorClient(MONGO_URL)
-db = cluster["avto_post_db"]
+# Vaqt mintaqasini sozlash (O'zbekiston)
+TASHKENT_TZ = pytz.timezone('Asia/Tashkent')
 
-scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-
-# Bazadagi barcha adminlarni olish funksiyasi
-async def get_all_admins():
-    admins_db = await db.admins.find().to_list(length=100)
-    return ADMINS + [a['user_id'] for a in admins_db]
-
-async def check_and_post():
-    try:
-        now = datetime.now(TIMEZONE).isoformat()
-        cursor = db.posts.find({"status": "pending", "time": {"$lte": now}})
-        posts = await cursor.to_list(length=100) 
-
-        active_admins = await get_all_admins()
-
-        for p in posts:
-            try:
-                # 1. Postni haqiqiy kanalga yuborish
-                await bot.copy_message(
-                    chat_id=p['target'],
-                    from_chat_id=p['from_chat_id'],
-                    message_id=p['message_id']
-                )
+async def send_scheduled_posts(bot: Bot):
+    """Har daqiqa ishlaydigan funksiya: Vaqti kelgan postlarni yuboradi"""
+    hozirgi_vaqt = datetime.now(TASHKENT_TZ).strftime("%H:%M")
+    
+    # Bazadan hali chiqmagan postlarni olish
+    pending_posts = await get_pending_posts()
+    all_channels = await get_channels()
+    
+    for post in pending_posts:
+        # Agar post vaqti hozirgi vaqtga mos kelsa
+        if post['send_time'] == hozirgi_vaqt:
+            target_ids = post['target_channels']
+            
+            for ch_id in target_ids:
+                # Kanal ma'lumotlarini qidirib topish
+                kanal_info = next((c for c in all_channels if c['channel_id'] == ch_id), None)
                 
-                # 2. Statusni 'sent' qilish
-                await db.posts.update_one(
-                    {"_id": p["_id"]}, 
-                    {"$set": {"status": "sent", "sent_at": datetime.now(TIMEZONE).isoformat()}}
-                )
-                
-                # ================= 3. ADMINGA HISOBOT =================
-                report_text = f"✅ **Post yuborildi!**\n📢 Kanal: `{p['target']}`\n⏰ Vaqt: `{p['time'][:16]}`"
-                for admin in active_admins:
+                if kanal_info:
+                    bot_username = kanal_info['bot_username']
+                    # Matndagi [BOT_NOMI] ni o'zgartirish
+                    final_text = post['text'].replace("[BOT_NOMI]", bot_username)
+                    
                     try:
-                        await bot.send_message(chat_id=admin, text=report_text)
-                        # Post nusxasini adminga ham tashlab qo'yamiz
-                        await bot.copy_message(chat_id=admin, from_chat_id=p['from_chat_id'], message_id=p['message_id'])
-                    except: pass
-                # =====================================================
+                        # Postni rasm yoki matn holida yuborish
+                        if post.get('photo_id'):
+                            await bot.send_photo(
+                                chat_id=ch_id, 
+                                photo=post['photo_id'], 
+                                caption=final_text
+                            )
+                        else:
+                            await bot.send_message(chat_id=ch_id, text=final_text)
+                        
+                        # Antispam: kanallar orasida qisqa tanaffus
+                        await asyncio.sleep(0.1)
+                        
+                    except Exception as e:
+                        logging.error(f"Xatolik {ch_id} kanalida: {e}")
 
-                # 4. Antispam
-                await asyncio.sleep(0.05) 
-                
-            except Exception as e:
-                await db.posts.update_one({"_id": p["_id"]}, {"$set": {"status": "failed", "error": str(e)}})
-                err_text = f"⚠️ **XATOLIK!**\nKanal: `{p['target']}`\nSabab: `{str(e)}`"
-                for admin in active_admins:
-                    try: await bot.send_message(chat_id=admin, text=err_text)
-                    except: pass 
-                
-    except Exception as main_e:
-        logging.error(f"Taymer xatosi: {main_e}")
+            # Post hamma kanalga yuborilgach, uni bazada yakunlash
+            await mark_post_sent(post['_id'])
 
 async def main():
-    dp.include_router(router)
-    scheduler.add_job(check_and_post, "interval", minutes=1)
+    # Bot va Dispatcher
+    bot = Bot(token=config.BOT_TOKEN)
+    dp = Dispatcher()
+
+    # Routerlarni ulash
+    dp.include_router(admin_router)
+
+    # Bazani tekshirish
+    await check_db_connection()
+
+    # Taymerni (Scheduler) sozlash
+    scheduler = AsyncIOScheduler(timezone=TASHKENT_TZ)
+    # Har 1 daqiqada postlarni tekshirish funksiyasini chaqiradi
+    scheduler.add_job(send_scheduled_posts, "interval", minutes=1, args=[bot])
     scheduler.start()
-    logging.info("🟢 Bot (To'liq versiya) ishga tushdi...")
-    await bot.delete_webhook(drop_pending_updates=True) 
+
+    print(f"🚀 Bot ishga tushdi... (Vaqt: {datetime.now(TASHKENT_TZ).strftime('%H:%M:%S')})")
+
+    # Eskirgan xabarlarni tozalash va pollingni boshlash
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    try: asyncio.run(main())
-    except KeyboardInterrupt: pass
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot to'xtatildi.")
