@@ -1,5 +1,5 @@
-aiogram
-motor
 dnspython
-apscheduler
+aiogram>=3.4.1
+motor>=3.3.2
+apscheduler>=3.10.4
 pytz
