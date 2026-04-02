@@ -41,3 +41,8 @@ TIME_ADDED_SUCCESS = "✅ Yangi vaqt ro'yxatga qo'shildi!"
 
 # strings.py ga qo'shing
 USER_ERROR_MSG = "❌ Kechirasiz, tizimda kutilmagan xatolik yuz berdi. Iltimos, birozdan so'ng qaytadan urinib ko'ring."
+
+# strings.py ga qo'shing
+STATS_TITLE = "📊 **Botning umumiy holati:**"
+NO_POSTS_IN_PLAN = "Hozircha navbatda turgan postlar mavjud emas."
+USER_ERROR_MSG = "❌ Kechirasiz, tizimda kutilmagan xatolik yuz berdi. Iltimos, birozdan so'ng qaytadan urinib ko'ring."
