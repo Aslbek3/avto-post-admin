@@ -38,3 +38,6 @@ CH_ADDED_SUCCESS = "✅ Kanal muvaffaqiyatli qo'shildi!"
 TIMES_LIST = "⏰ **Joriy avto-vaqtlar ro'yxati:**\n\n"
 ADD_TIME_PROMPT = "Yangi vaqtni kiriting (Masalan: 18:30):"
 TIME_ADDED_SUCCESS = "✅ Yangi vaqt ro'yxatga qo'shildi!"
+
+# strings.py ga qo'shing
+USER_ERROR_MSG = "❌ Kechirasiz, tizimda kutilmagan xatolik yuz berdi. Iltimos, birozdan so'ng qaytadan urinib ko'ring."
