@@ -171,7 +171,7 @@ async def del_time_call(call: CallbackQuery):
 async def post_start(message: Message, state: FSMContext):
     uid = message.from_user.id
     if not await db.is_admin(uid): return
-    await message.answer("Postni yuboring (Rasm va matn):")
+    await message.answer("Postni yuboring (Rasm va matn): [bot nomi] kabi matn bolsin ")
     await state.set_state(PostState.post_kutish)
 
 @admin_router.message(StateFilter(PostState.post_kutish))
