@@ -11,16 +11,17 @@ import database as db
 import strings
 from handlers.admin import admin_router
 
-# Loglarni sozlash
+# Loglarni sozlash (Xatolarni ko'rish uchun)
 logging.basicConfig(level=logging.INFO)
 
 async def send_scheduled_posts(bot: Bot):
-    """Vaqti kelgan postlarni kanallarga tarqatish funksiyasi"""
+    """Vaqti kelgan postlarni yuborish mantiqi"""
     hozirgi_vaqt = datetime.now(config.TIMEZONE).strftime("%H:%M")
     pending_posts = await db.get_pending_posts()
     all_channels = await db.get_channels()
     
     for post in pending_posts:
+        # Faqat vaqti kelgan postni tekshiramiz
         if post['send_time'] == hozirgi_vaqt:
             target_ids = post['target_channels']
             
@@ -28,7 +29,7 @@ async def send_scheduled_posts(bot: Bot):
                 kanal_info = next((c for c in all_channels if c['channel_id'] == ch_id), None)
                 if kanal_info:
                     bot_username = kanal_info['bot_username']
-                    # [BOT_NOMI] ni kanalga biriktirilgan botga almashtirish
+                    # [BOT_NOMI] belgisini kanal boti bilan almashtirish
                     final_text = post['text'].replace("[BOT_NOMI]", bot_username)
                     
                     try:
@@ -36,43 +37,38 @@ async def send_scheduled_posts(bot: Bot):
                             await bot.send_photo(chat_id=ch_id, photo=post['photo_id'], caption=final_text)
                         else:
                             await bot.send_message(chat_id=ch_id, text=final_text)
-                        await asyncio.sleep(0.1) # Telegram limitidan oshmaslik uchun
+                        
+                        # SPAMDAN HIMOYA: Har bir kanal orasida 0.1 soniya kutish
+                        await asyncio.sleep(0.1)
                     except Exception as e:
                         logging.error(f"Kanalga yuborishda xato ({ch_id}): {e}")
 
-            # Yuborilgach bazadan o'chirish yoki statusini o'zgartirish
+            # MUHIM: Post yuborilgandan keyingina bazadan o'chiriladi
             await db.mark_post_sent(post['_id'])
 
-# ==================== GLOBAL XATO USHLAGICH ====================
 async def setup_error_handler(dp: Dispatcher, bot: Bot):
+    """Xatolik yuz berganda foydalanuvchiga xabar berish"""
     @dp.error()
     async def error_handler(event: ErrorEvent):
-        # 1. Xatoni logga yozish (serverda ko'rinishi uchun)
         logging.error(f"XATOLIK: {traceback.format_exc()}")
-        
-        # 2. Xatoga duch kelgan foydalanuvchini aniqlash
         chat_id = None
         if event.update.message:
             chat_id = event.update.message.chat.id
         elif event.update.callback_query:
             chat_id = event.update.callback_query.message.chat.id
             
-        # 3. Foydalanuvchining o'ziga xabar yuborish
         if chat_id:
             try:
-                # Xato haqida umumiy xabar va qisqacha texnik ma'lumot
                 err_msg = f"{strings.USER_ERROR_MSG}\n\n⚠️ *Texnik xato:* `{str(event.exception)[:100]}`"
                 await bot.send_message(chat_id, err_msg, parse_mode="Markdown")
-            except Exception as e:
-                logging.error(f"Xabarni foydalanuvchiga yuborib bo'lmadi: {e}")
+            except: 
+                pass
 
-# ==================== ASOSIY ISHGA TUSHIRISH ====================
 async def main():
-    # Bot va Dispatcher ob'ektlarini yaratish
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
     
-    # Routerlarni ulash
+    # Routerni ulash (admin.py dagi kodlar ishlashi uchun)
     dp.include_router(admin_router)
     
     # Baza bilan aloqani tekshirish
@@ -81,14 +77,12 @@ async def main():
     # Xato ushlagichni sozlash
     await setup_error_handler(dp, bot)
 
-    # Avto-post taymerini (Scheduler) sozlash
+    # Har daqiqada bazani tekshiradigan taymer
     scheduler = AsyncIOScheduler(timezone=config.TIMEZONE)
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1, args=[bot])
     scheduler.start()
 
-    print("🚀 Bot muvaffaqiyatli ishga tushdi...")
-    
-    # Webhook bo'lsa o'chirib, pollingni boshlash
+    print("🚀 Bot ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
