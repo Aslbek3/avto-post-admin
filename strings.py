@@ -29,3 +29,12 @@ ERR_BOT_NAME = "❌ Bot nomi @ bilan boshlanishi kerak."
 ERR_TIME_FORMAT = "❌ Noto'g'ri format. Vaqtni faqat HH:MM ko'rinishida yozing."
 POST_SAVED = "✅ Post muvaffaqiyatli saqlandi!"
 CH_SAVED = "✅ Kanal muvaffaqiyatli saqlandi!"
+
+# strings.py
+CHANNELS_LIST = "📢 **Ulangan kanallar ro'yxati:**\n\n"
+ADD_CH_ID_PROMPT = "Yangi kanal ID raqamini yoki username'ni yuboring (masalan: -100123456):"
+ADD_BOT_NAME_PROMPT = "Ushbu kanal uchun bot manzili (@bot_username) ni yuboring:"
+CH_ADDED_SUCCESS = "✅ Kanal muvaffaqiyatli qo'shildi!"
+TIMES_LIST = "⏰ **Joriy avto-vaqtlar ro'yxati:**\n\n"
+ADD_TIME_PROMPT = "Yangi vaqtni kiriting (Masalan: 18:30):"
+TIME_ADDED_SUCCESS = "✅ Yangi vaqt ro'yxatga qo'shildi!"
