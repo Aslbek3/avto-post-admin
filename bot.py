@@ -11,50 +11,54 @@ import database as db
 import strings
 from handlers.admin import admin_router
 
-# Loglarni sozlash (Xatolarni ko'rish uchun)
+# Loglarni sozlash
 logging.basicConfig(level=logging.INFO)
 
 async def send_scheduled_posts(bot: Bot):
-    """Vaqti kelgan postlarni yuborish mantiqi"""
+    """Vaqti kelgan postlarni har bir kanal uchun maxsus bot nomi bilan yuborish"""
     hozirgi_vaqt = datetime.now(config.TIMEZONE).strftime("%H:%M")
-    pending_posts = await db.get_pending_posts()
-    all_channels = await db.get_channels()
     
-    for post in pending_posts:
-        # Faqat vaqti kelgan postni tekshiramiz
+    # Barcha kutilayotgan postlarni olish
+    all_pending = await db.get_all_pending_posts()
+    
+    for post in all_pending:
         if post['send_time'] == hozirgi_vaqt:
+            uid = post['owner_id']
+            # Faqat shu post egasining kanallarini olamiz
+            user_channels = await db.get_channels(uid)
             target_ids = post['target_channels']
             
             for ch_id in target_ids:
-                kanal_info = next((c for c in all_channels if c['channel_id'] == ch_id), None)
+                # Kanal ma'lumotini qidirish
+                kanal_info = next((c for c in user_channels if c['channel_id'] == ch_id), None)
+                
                 if kanal_info:
-                    bot_username = kanal_info['bot_username']
-                    # [BOT_NOMI] belgisini kanal boti bilan almashtirish
-                    final_text = post['text'].replace("[BOT_NOMI]", bot_username)
+                    bot_link = kanal_info['bot_username']
+                    # Katta va kichik harflardagi [bot nomi] ni dinamik almashtirish
+                    msg_text = post['text'].replace("[bot nomi]", bot_link).replace("[BOT_NOMI]", bot_link)
                     
                     try:
                         if post.get('photo_id'):
-                            await bot.send_photo(chat_id=ch_id, photo=post['photo_id'], caption=final_text)
+                            await bot.send_photo(chat_id=ch_id, photo=post['photo_id'], caption=msg_text)
                         else:
-                            await bot.send_message(chat_id=ch_id, text=final_text)
+                            await bot.send_message(chat_id=ch_id, text=msg_text)
                         
-                        # SPAMDAN HIMOYA: Har bir kanal orasida 0.1 soniya kutish
-                        await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.1) # Spamdan himoya
                     except Exception as e:
-                        logging.error(f"Kanalga yuborishda xato ({ch_id}): {e}")
+                        logging.error(f"Yuborishda xato ({ch_id}): {e}")
 
-            # MUHIM: Post yuborilgandan keyingina bazadan o'chiriladi
+            # Yuborib bo'lingach, bazadan o'chiramiz
             await db.mark_post_sent(post['_id'])
 
 async def setup_error_handler(dp: Dispatcher, bot: Bot):
-    """Xatolik yuz berganda foydalanuvchiga xabar berish"""
+    """Xatolarni ushlab, foydalanuvchiga yuborish"""
     @dp.error()
     async def error_handler(event: ErrorEvent):
         logging.error(f"XATOLIK: {traceback.format_exc()}")
         chat_id = None
-        if event.update.message:
+        if event.update.message: 
             chat_id = event.update.message.chat.id
-        elif event.update.callback_query:
+        elif event.update.callback_query: 
             chat_id = event.update.callback_query.message.chat.id
             
         if chat_id:
@@ -68,16 +72,13 @@ async def main():
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
     
-    # Routerni ulash (admin.py dagi kodlar ishlashi uchun)
+    # Routerni ulash
     dp.include_router(admin_router)
     
-    # Baza bilan aloqani tekshirish
     await db.check_db_connection()
-    
-    # Xato ushlagichni sozlash
     await setup_error_handler(dp, bot)
 
-    # Har daqiqada bazani tekshiradigan taymer
+    # Har 1 daqiqada ishlaydigan taymer
     scheduler = AsyncIOScheduler(timezone=config.TIMEZONE)
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1, args=[bot])
     scheduler.start()
