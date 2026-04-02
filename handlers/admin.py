@@ -131,7 +131,7 @@ async def auto_times_menu(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[])
     for t in times:
         text += f"🕒 {t}\n"
-        kb.inline_keyboard.append([InlineKeyboardButton(text=f"🗑 {t} ni o'chirish", callback_data=f"deltime_{t}")])
+        kb.inline_keyboard.append([InlineKeyboardButton(text=f"🗑 {t} o'chirish", callback_data=f"deltime_{t}")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="➕ Vaqt qo'shish", callback_data="add_new_time")])
     await message.answer(text, reply_markup=kb)
 
@@ -172,6 +172,7 @@ async def post_get_content(message: Message, state: FSMContext):
         return
     photo_id = message.photo[-1].file_id if message.photo else None
     await state.update_data(photo_id=photo_id, text=message.caption or message.text or "")
+    
     kanallar = await db.get_channels()
     if not kanallar:
         await message.answer("❌ Avval kanal qo'shing!")
@@ -220,6 +221,7 @@ async def post_save_final(message: Message, state: FSMContext):
         except:
             await message.answer(strings.ERR_TIME_FORMAT)
             return
+    
     data = await state.get_data()
     await db.add_post(data['text'], data['photo_id'], yakuniy_v, data['target_channels'])
     await message.answer(f"{strings.POST_SAVED}\nVaqt: {yakuniy_v}", reply_markup=main_menu)
