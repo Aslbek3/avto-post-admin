@@ -4,6 +4,7 @@ import traceback
 from datetime import datetime
 from aiogram import Bot, Dispatcher
 from aiogram.types import ErrorEvent
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError # Yangi qatorlar
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
@@ -15,19 +16,13 @@ from handlers.settings import settings_router
 logging.basicConfig(level=logging.INFO)
 
 async def send_scheduled_posts(bot: Bot):
-    # VAQT FORMATI (DD.MM HH:MM)
     hozirgi_vaqt = datetime.now(config.TIMEZONE).strftime("%d.%m %H:%M")
-    
     all_pending = await db.get_all_pending_posts()
-    
-    # 🌟 O'ZGARISH: Kanallarni kim qo'shganidan qat'i nazar, umumiy bazadan bittada olamiz
     umumiy_kanallar = await db.get_channels()
     
     for post in all_pending:
         if post['send_time'] == hozirgi_vaqt:
             target_ids = post['target_channels']
-            
-            # Post yuborilganini tekshirish uchun o'zgaruvchi
             muvaffaqiyatli = False 
             
             for ch_id in target_ids:
@@ -37,29 +32,45 @@ async def send_scheduled_posts(bot: Bot):
                     bot_link = kanal_info['bot_username']
                     msg_text = post['text'].replace("[bot nomi]", bot_link).replace("[BOT_NOMI]", bot_link)
                     
+                    # Spamga tushmaslik uchun urinish
                     try:
                         if post.get('photo_id'):
                             await bot.send_photo(chat_id=ch_id, photo=post['photo_id'], caption=msg_text)
                         else:
                             await bot.send_message(chat_id=ch_id, text=msg_text)
                         
-                        muvaffaqiyatli = True # Hech bo'lmasa 1 ta kanalga borsa, true bo'ladi
-                        await asyncio.sleep(0.1) 
+                        muvaffaqiyatli = True 
+                        await asyncio.sleep(1) # Yuborish tezligini 1 soniyaga uzaytirdik (XAVFSIZ TEZLIK)
+                        
+                    except TelegramRetryAfter as e:
+                        # Telegram botni vaqtinchalik cheklasa, aytilgan vaqtcha kutadi
+                        logging.warning(f"⚠️ SPAM LIMITI! {e.retry_after} soniya kutamiz...")
+                        await asyncio.sleep(e.retry_after)
+                        
+                        # Kutib bo'lgach, yana bir bor yuborib ko'radi
+                        try:
+                            if post.get('photo_id'):
+                                await bot.send_photo(chat_id=ch_id, photo=post['photo_id'], caption=msg_text)
+                            else:
+                                await bot.send_message(chat_id=ch_id, text=msg_text)
+                            muvaffaqiyatli = True
+                        except Exception:
+                            pass
+                            
+                    except TelegramForbiddenError:
+                        logging.error(f"❌ Bot kanaldan chiqarib yuborilgan: {ch_id}")
                     except Exception as e:
                         logging.error(f"Yuborishda xato ({ch_id}): {e}")
 
-            # KANALLARGA YUBORIB BO'LGANDAN SO'NG, NAVBAT KANALIDAN O'CHIRISH
             if post.get('queue_msg_id'):
                 try:
                     await bot.delete_message(chat_id=config.QUEUE_CHANNEL_ID, message_id=post['queue_msg_id'])
                 except Exception as e:
-                    logging.error(f"Navbat kanalidan o'chirishda xato: {e}")
+                    pass
 
-            # Agar yuborish o'xshasa sent, o'xshamasa failed statusi beriladi
             if muvaffaqiyatli:
                 await db.mark_post_sent(post['_id'])
             else:
-                # Baza faylidagi statistika to'g'ri ishlashi uchun xatolikni yozamiz
                 await db.db.posts.update_one({"_id": post['_id']}, {"$set": {"status": "failed"}})
 
 async def setup_error_handler(dp: Dispatcher, bot: Bot):
@@ -93,7 +104,7 @@ async def main():
     scheduler.add_job(send_scheduled_posts, "interval", minutes=1, args=[bot])
     scheduler.start()
 
-    print("🚀 Bot ishga tushdi (Umumiy tizim)...")
+    print("🚀 Bot ishga tushdi (Anti-Spam o'rnatilgan)...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
