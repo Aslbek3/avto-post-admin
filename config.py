@@ -6,7 +6,7 @@ BOT_TOKEN = "8652336597:AAF6XzAsDfL1OWQ5IdhD9DVCYTlLsmHUI_8"
 ADMINS = [7586510077, 7126035479, 8424467038, 7186161946] 
 
 # MongoDB ulanish kodi (dollar belgisiz parol bilan)
-MONGO_URL = "mongodb+srv://Aslbek:qaszqasz@justanime.kvo8qhd.mongodb.net/?appName=JustAnime"
+MONGO_URL = "mongodb+srv://Aslbek1:qaszqasz@justanime.kvo8qhd.mongodb.net/?appName=JustAnime"
 
 TIMEZONE = pytz.timezone("Asia/Tashkent")
 
