@@ -9,8 +9,12 @@ ADMINS = [7586510077, 7126035479, 8424467038, 7186161946]
 MONGO_URL = "mongodb+srv://usa:Asl2007@cluster0.sf2njxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 
 TIMEZONE = pytz.timezone("Asia/Tashkent")
-  
 
+# XOHISHIY DETARLI KERAK EMAS BARIBIR ISHLAMAYDI
+WATERMARK_TEXT = "@reja12bot" 
 
+# 4. Navbatda turgan postlar tushadigan kanal ID si (-100 bilan boshlanadi)
+QUEUE_CHANNEL_ID = -1003881509305
 
+DB_NAME = "avtopost_db"
 
