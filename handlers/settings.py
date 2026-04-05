@@ -1,63 +1,83 @@
-# settings.py
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 import database as db
-import strings # Matnlarni ulaymiz
+import config
 
 settings_router = Router()
 
-class ChannelState(StatesGroup):
-    kanal_id_kutish = State()
-    bot_nomi_kutish = State()
+class SettingsState(StatesGroup):
+    waiting_for_new_admin_id = State()
 
-class TimeState(StatesGroup):
-    vaqt_kutish = State()
-
-# ==================== KANALLAR ====================
-@settings_router.message(F.text == "📢 Kanallar")
-async def channels_menu(message: Message, state: FSMContext):
-    kanallar = await db.get_channels()
-    matn = strings.CHANNELS_LIST
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-
-    if kanallar:
-        for k in kanallar:
-            matn += f"▪️ {k['channel_id']} | 🤖 {k['bot_username']}\n"
-            # Har bir kanal yoniga o'chirish tugmasi
-            kb.inline_keyboard.append([InlineKeyboardButton(text=f"🗑 {k['channel_id']} ni o'chirish", callback_data=f"del_ch_{k['channel_id']}")])
+@settings_router.message(F.text == "⚙️ Sozlamalar")
+async def settings_menu(message: Message):
+    uid = message.from_user.id
+    if not await db.is_admin(uid): return
     
-    kb.inline_keyboard.append([InlineKeyboardButton(text="➕ Yangi kanal qo'shish", callback_data="add_channel")])
-    await message.answer(matn, reply_markup=kb)
+    # 🌟 Barcha adminlar uchun bir xil menyu
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Barcha Postlarni O'chirish (Umumiy)", callback_data="set_clear_posts")],
+        [InlineKeyboardButton(text="➕ Yangi Admin Qo'shish", callback_data="set_add_admin")]
+    ])
+        
+    await message.answer("⚙️ Sozlamalar bo'limi", reply_markup=kb)
 
-# Kanal o'chirish callback
-@settings_router.callback_query(F.data.startswith("del_ch_"))
-async def delete_channel(call: CallbackQuery):
-    ch_id = call.data.replace("del_ch_", "")
-    await db.remove_channel(ch_id)
-    await call.answer("❌ Kanal o'chirildi")
-    await call.message.delete()
+@settings_router.callback_query(F.data == "set_clear_posts")
+async def confirm_clear_posts(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Yo'q", callback_data="set_back")],
+        [InlineKeyboardButton(text="✅ Ha, aniq o'chirilsin", callback_data="set_clear_posts_confirm")]
+    ])
+    await call.message.edit_text("⚠️ DIQQAT!\n\nBu amal umumiy bazadagi BARCHA kutayotgan postlarni o'chiradi. Tasdiqlaysizmi?", reply_markup=kb)
 
-# ==================== AVTO-VAQT ====================
-@settings_router.message(F.text == "⏰ Avtovaqt")
-async def auto_time_menu(message: Message):
-    vaqtlar = await db.get_auto_times()
-    matn = strings.TIMES_LIST
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
+@settings_router.callback_query(F.data == "set_clear_posts_confirm")
+async def clear_posts_confirmed(call: CallbackQuery):
+    # Umumiy bazadan kutilayotgan hamma postlarni olamiz
+    pending_posts = await db.db.posts.find({"status": "pending"}).to_list(length=None)
+    
+    for post in pending_posts:
+        if post.get("queue_msg_id"):
+            try:
+                await call.bot.delete_message(chat_id=config.QUEUE_CHANNEL_ID, message_id=post["queue_msg_id"])
+            except:
+                pass
+                
+    await db.db.posts.delete_many({"status": "pending"})
+    await call.message.edit_text("✅ Umumiy bazadagi barcha postlar o'chirildi!",
+                                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="set_back")]]))
 
-    for v in vaqtlar:
-        matn += f"🕒 {v}\n"
-        kb.inline_keyboard.append([InlineKeyboardButton(text=f"🗑 {v} ni o'chirish", callback_data=f"del_tm_{v}")])
+@settings_router.callback_query(F.data == "set_add_admin")
+async def add_admin_start(call: CallbackQuery, state: FSMContext):
+    # Har qanday admin yangi admin qo'sha oladi
+    await call.message.edit_text("👤 Yangi adminning Telegram ID raqamini yuboring:\n*(Faqat raqamlar)*")
+    await state.set_state(SettingsState.waiting_for_new_admin_id)
 
-    kb.inline_keyboard.append([InlineKeyboardButton(text="➕ Yangi vaqt qo'shish", callback_data="add_time")])
-    await message.answer(matn, reply_markup=kb)
+@settings_router.message(StateFilter(SettingsState.waiting_for_new_admin_id))
+async def save_new_admin(message: Message, state: FSMContext):
+    new_admin_id = message.text.strip()
+    
+    if not new_admin_id.isdigit():
+        await message.answer("❌ Xato! ID faqat raqamlardan iborat bo'lishi kerak. Qaytadan yuboring:")
+        return
+        
+    new_admin_id = int(new_admin_id)
+    
+    # Bazada borligini tekshiramiz
+    existing = await db.db.admins.find_one({"user_id": new_admin_id})
+    if existing or new_admin_id in config.ADMINS:
+        await message.answer("ℹ️ Bu foydalanuvchi allaqachon tizimda admin!")
+    else:
+        await db.db.admins.insert_one({"user_id": new_admin_id})
+        await message.answer(f"✅ Tizimga yangi admin muvaffaqiyatli qo'shildi!\nID: `{new_admin_id}`")
+        
+    await state.clear()
 
-# Vaqt o'chirish callback
-@settings_router.callback_query(F.data.startswith("del_tm_"))
-async def delete_time(call: CallbackQuery):
-    v_val = call.data.replace("del_tm_", "")
-    # Bazadan o'chirish kodi (database.py da bo'lishi kerak)
-    await db.db.autotimes.delete_one({"time": v_val}) 
-    await call.answer(f"✅ {v_val} o'chirildi")
-    await call.message.delete()
+@settings_router.callback_query(F.data == "set_back")
+async def back_to_settings(call: CallbackQuery):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Barcha Postlarni O'chirish (Umumiy)", callback_data="set_clear_posts")],
+        [InlineKeyboardButton(text="➕ Yangi Admin Qo'shish", callback_data="set_add_admin")]
+    ])
+    await call.message.edit_text("⚙️ Sozlamalar bo'limi", reply_markup=kb)
