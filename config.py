@@ -3,7 +3,7 @@ import pytz
 # SIZNING YANGI BOT TOKENINGIZNI SHU YERGA QO'YING:
 BOT_TOKEN = "8633094938:AAE5OcT_RwZGRz4ovKH1CKVrqUIfPYFbnpo"
 
-ADMINS = [7586510077, 7126035479, 8424467038, 7186161946] 
+ADMINS = [7586510077, 7126035479, 7186161946] 
 
 # MongoDB ulanish kodi (dollar belgisiz parol bilan)
 MONGO_URL = "mongodb+srv://Aslbek1:qaszqasz@justanime.kvo8qhd.mongodb.net/?appName=JustAnime"
